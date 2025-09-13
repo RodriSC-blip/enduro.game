@@ -1,8 +1,8 @@
 #include <stdio.h>
-#include <ncurses.h>
-#include <unistd.h>
 #include <stdlib.h>
 #include <time.h>
+#include <unistd.h>
+#include <ncurses.h>
 #include <sys/time.h>
 
 typedef struct{
@@ -12,138 +12,152 @@ typedef struct{
     int largura,altura;
     int velocidade_y,velocidade_x;
     float modificador;
-}object;
+} object;
 
-long long tempo_em_ms() {
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    return (long long)(tv.tv_sec) * 1000 + (tv.tv_usec / 1000);
-}
-
-object player;
+/* Sprites (texto) dos carros */
 char carro0gg[]="x=/\\=x";
 char carro1gg[]="H||||H";
 char carro2gg[]=" ---- ";
-char carro0pp[]="=--=";
-char carro1pp[]="H==H";
-int largura_carroGG = 6,altura_carroGG=3;
-int largura_carroPP = 4,altura_carroPP=2;
-int altura,largura,meio,quoficiente,ambiente=3,tempo_de_curva=500;
-float curva_da_pista=1;
-int n_carros=3;
-object carro[3];
+char carro0pp[]=" =--=";
+char carro1pp[]="H====H";
 
-int vidas = 3; // Número de vidas do jogador
-int pontuacao = 0; // Pontuação
+int largura_carroGG = 6, altura_carroGG = 3;
+int largura_carroPP = 4, altura_carroPP = 2;
 
+int altura, largura, meio;
+int ambiente = 3;
+float curva_da_pista = 1;
+int n_carros = 3;
+object carro[10]; /* deixei 10 para segurança, mas usa n_carros */
+object player;
+
+int pontuacao = 0;
+
+/* tempo em ms (se precisar futuramente) */
+long long tempo_em_ms() {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (long long)tv.tv_sec * 1000 + (tv.tv_usec / 1000);
+}
+
+/* get_random seguro (evita modulo por zero) */
 int get_random(int max){
-    int x=rand() % max;
-    return x;
+    if (max <= 1) return 0;
+    return rand() % max;
 }
 
+/* pequenas variações no movimento lateral do inimigo */
 void mudar_modificador(object *obj){
-    obj->modificador=get_random(3)-1;
+    obj->modificador = (float)(get_random(3) - 1); /* -1,0,1 */
 }
 
+/* Inicializa/posiciona todos os inimigos (chame após ler tamanho da tela e posicionar player) */
 void criar_inimigos() {
     for (int i = 0; i < n_carros; i++) {
-        if (carro[i].y > 0 && carro[i].y < altura) continue;
-
         int pista_esq = meio - 10;
         int pista_dir = meio + 10 - largura_carroGG;
+        int span = pista_dir - pista_esq;
+        if (span <= 0) span = 1;
 
+        /* evita spawn encima do jogador */
+        int tries = 0;
         do {
-            carro[i].x = pista_esq + get_random(pista_dir - pista_esq);
-        } while (abs(carro[i].x - player.x) < largura_carroGG);
+            carro[i].x = pista_esq + get_random(span + 1);
+            tries++;
+            if (tries > 20) break;
+        } while (abs((int)carro[i].x - (int)player.x) < largura_carroGG);
 
         mudar_modificador(&carro[i]);
-        carro[i].y = -get_random(20)*altura_carroPP;
-        carro[i].dx = 0;
-        carro[i].dy = 0.25;
+        carro[i].y = - (float)get_random(20) * altura_carroPP;
+        carro[i].dx = 0.0f;
+        carro[i].dy = 0.25f;
+        carro[i].acumulo_y = 0.0f;
+        carro[i].largura = largura_carroGG;
+        carro[i].altura = altura_carroGG;
+        carro[i].velocidade_x = 1;
+        carro[i].velocidade_y = 1;
     }
 }
 
+/* calcula limite esquerdo da pista para a linha j */
 int quoficiente_esq(int j){
-    float lado=0;
-    quoficiente=((float)j*0.7/meio)*largura;
-    lado = (0.8*meio)-quoficiente;
+    float q = ((float)j * 0.7f / meio) * largura;
+    float lado = (0.8f * meio) - q;
     return (int)lado;
 }
 
+/* calcula limite direito da pista para a linha j */
 int quoficiente_dir(int j){
-    float lado=0;
-    quoficiente=((float)j*0.7/meio)*largura;
-    lado = (1.2*meio)+quoficiente;
+    float q = ((float)j * 0.7f / meio) * largura;
+    float lado = (1.2f * meio) + q;
     return (int)lado;
 }
 
+/* desenha um carro (verifica limites antes) */
 void print_carro(object obj, int is_player){
-    if(!is_player) attron(COLOR_PAIR(1));
-    if(obj.largura==largura_carroGG && obj.altura==altura_carroGG){
-        mvprintw(obj.y, obj.x,"%s",carro0gg);
-        mvprintw(obj.y+1, obj.x,"%s",carro1gg);
-        mvprintw(obj.y+2, obj.x,"%s",carro2gg);
-    }else{
-        mvprintw(obj.y, obj.x+1,"%s",carro0pp);
-        mvprintw(obj.y+1, obj.x+1,"%s",carro1pp);
+    int ix = (int)obj.x;
+    int iy = (int)obj.y;
+
+    /* se estiver totalmente fora da tela, não desenha */
+    if (iy + obj.altura < 0 || iy >= altura) return;
+    if (ix + obj.largura < 0 || ix >= largura) return;
+
+    if (!is_player) attron(COLOR_PAIR(1));
+
+    if (obj.largura == largura_carroGG && obj.altura == altura_carroGG) {
+        if (iy >= 0 && iy < altura) mvprintw(iy, ix, "%s", carro0gg);
+        if (iy+1 >= 0 && iy+1 < altura) mvprintw(iy+1, ix, "%s", carro1gg);
+        if (iy+2 >= 0 && iy+2 < altura) mvprintw(iy+2, ix, "%s", carro2gg);
+    } else {
+        if (iy >= 0 && iy < altura) mvprintw(iy, ix+1, "%s", carro0pp);
+        if (iy+1 >= 0 && iy+1 < altura) mvprintw(iy+1, ix+1, "%s", carro1pp);
     }
-    if(!is_player) attroff(COLOR_PAIR(1));
+
+    if (!is_player) attroff(COLOR_PAIR(1));
 }
 
-void atualizar_pos(object *obj,int is_player){
-    if(obj->x + (obj->dx * obj->velocidade_x) >= quoficiente_esq(obj->y)+1 &&
-       obj->x + (obj->dx * obj->velocidade_x) <= quoficiente_dir(obj->y) - largura_carroGG){
-        obj->x += obj->dx * obj->velocidade_x;
+/* atualiza posição, respeitando limites laterais da pista e limites verticais (para player) */
+void atualizar_pos(object *obj, int is_player){
+    int linha = (int)obj->y;
+    int left = quoficiente_esq(linha) + 1;
+    int right = quoficiente_dir(linha) - largura_carroGG;
+
+    float nx = obj->x + (obj->dx * obj->velocidade_x);
+    if (nx >= left && nx <= right) {
+        obj->x = nx;
     }
-    if(obj->y + (obj->dy * obj->velocidade_y) >= 0 &&
-       obj->y + (obj->dy * obj->velocidade_y) <= altura - altura_carroGG){
-        if(is_player){
-            obj->y += obj->dy * obj->velocidade_y;
+
+    /* só o player tem movimento vertical controlado (set por dy) */
+    float ny = obj->y + (obj->dy * obj->velocidade_y);
+    if (is_player) {
+        if (ny >= 0 && ny <= (altura - altura_carroGG)) {
+            obj->y = ny;
+        } else {
+            /* clamp */
+            if (ny < 0) obj->y = 0;
+            if (ny > altura - altura_carroGG) obj->y = altura - altura_carroGG;
         }
     }
 }
 
-void gerenciar_carro(object *obj,int is_player){
-    if(obj->y >= altura*0.3){
-        obj->largura=largura_carroGG;
-        obj->altura=altura_carroGG;
-        obj->velocidade_y=1;
-        obj->velocidade_x=1;
-    }else{
-        obj->largura=largura_carroPP;
-        obj->altura=altura_carroPP;
-        obj->velocidade_y=3;
-        obj->velocidade_x=3;
+/* define "escala" (tamanho/velocidade) do carro de acordo com y e desenha */
+void gerenciar_carro(object *obj, int is_player){
+    if (obj->y >= altura * 0.3f) {
+        obj->largura = largura_carroGG;
+        obj->altura = altura_carroGG;
+        obj->velocidade_y = 1;
+        obj->velocidade_x = 1;
+    } else {
+        obj->largura = largura_carroPP;
+        obj->altura = altura_carroPP;
+        obj->velocidade_y = 3;
+        obj->velocidade_x = 3;
     }
-    atualizar_pos(obj,is_player);
-    print_carro(*obj,is_player);
+    atualizar_pos(obj, is_player);
+    print_carro(*obj, is_player);
 }
 
-void pista(){
-    attron(COLOR_PAIR(ambiente));
-    for(int j=0;j<=altura;j++){
-        for (int i=0;i<quoficiente_esq(j);i++){
-            int x=curva_da_pista*i;
-            move(j,x);
-            addstr(" ");
-        }
-        for (int i=(int)quoficiente_dir(j);i<largura;i++){
-            int x=curva_da_pista*i;
-            move(j,(x+1));
-            addstr(" ");
-        }
-    }
-    attroff(COLOR_PAIR(ambiente));
-    attron(COLOR_PAIR(2));
-    for(int i=0;i<=altura;i++){
-        quoficiente=((float)i*0.7/meio)*largura;
-        mvprintw(i,(0.8*meio)-quoficiente,"%s","/");
-        mvprintw(i,(1.2*meio)+quoficiente,"%s","\\");
-    }
-    attroff(COLOR_PAIR(2));
-}
-
-// Função para verificar colisão (bounding box)
+/* colisão por bounding-box (funciona com floats) */
 int colidiu(object a, object b) {
     return (a.x < b.x + b.largura &&
             a.x + a.largura > b.x &&
@@ -151,103 +165,145 @@ int colidiu(object a, object b) {
             a.y + a.altura > b.y);
 }
 
-int main(){
-    srand(time(NULL));
-    int key;
+/* main: inicializa ncurses, estado e loop */
+int main() {
+    srand((unsigned)time(NULL));
 
     initscr();
-    nodelay(stdscr,true);
-    keypad(stdscr,true);
-    curs_set(0);
+    cbreak();
     noecho();
+    curs_set(0);
+    keypad(stdscr, TRUE);
+    nodelay(stdscr, TRUE);
     start_color();
     use_default_colors();
-    init_pair(1,COLOR_RED,-1);
-    init_pair(2,COLOR_YELLOW,COLOR_YELLOW);
-    init_pair(3,COLOR_GREEN,COLOR_GREEN);
+    init_pair(1, COLOR_RED, -1);      /* inimigos */
+    init_pair(2, COLOR_YELLOW, COLOR_YELLOW); /* bordas */
+    init_pair(3, COLOR_GREEN, COLOR_GREEN);   /* ambiente */
 
-    getmaxyx(stdscr,altura,largura);
-    meio=largura/2;
-    player.x=(int)meio-(largura_carroGG/2);
-    player.y=altura-altura_carroGG;
-    player.velocidade_x=2;
+    getmaxyx(stdscr, altura, largura);
+    meio = largura / 2;
+
+    /* inicializa jogador */
+    player.x = (float)meio - (largura_carroGG / 2);
+    player.y = (float)altura - altura_carroGG;
+    player.dx = 0.0f;
+    player.dy = 0.0f;
+    player.acumulo_y = 0.0f;
+    player.largura = largura_carroGG;
+    player.altura = altura_carroGG;
+    player.velocidade_x = 2;
+    player.velocidade_y = 1;
+    player.modificador = 0.0f;
+
+    criar_inimigos(); /* posiciona inimigos */
 
     long long intervalo = 800;
     long long ultimo_tempo = tempo_em_ms();
-    criar_inimigos();
 
-    while(true){
+    int key;
+    while (1) {
         long long agora = tempo_em_ms();
-
         if (agora - ultimo_tempo >= intervalo) {
             ultimo_tempo = agora;
         }
 
         erase();
-        pista();
-        key=getch();
 
-        if(key=='q'){ break; }
+        /* desenha pista (simples) */
+        attron(COLOR_PAIR(ambiente));
+        for (int j = 0; j <= altura; j++) {
+            for (int i = 0; i < quoficiente_esq(j); i++) {
+                int x = (int)(curva_da_pista * i);
+                if (x >= 0 && x < largura) {
+                    mvaddch(j, x, ' ');
+                }
+            }
+            for (int i = quoficiente_dir(j); i < largura; i++) {
+                int x = (int)(curva_da_pista * i);
+                if (x+1 >= 0 && x+1 < largura) {
+                    mvaddch(j, x+1, ' ');
+                }
+            }
+        }
+        attroff(COLOR_PAIR(ambiente));
 
-        if(key==KEY_UP) player.dy=-1;
-        else if(key==KEY_DOWN) player.dy=1;
-        else player.dy=0;
+        attron(COLOR_PAIR(2));
+        for (int i = 0; i <= altura; i++) {
+            int q = (int)(((float)i * 0.7f / meio) * largura);
+            int left = (int)((0.8f * meio) - q);
+            int right = (int)((1.2f * meio) + q);
+            if (left >= 0 && left < largura) mvprintw(i, left, "/");
+            if (right >= 0 && right < largura) mvprintw(i, right, "\\");
+        }
+        attroff(COLOR_PAIR(2));
 
-        if(key==KEY_LEFT) player.dx=-1;
-        else if(key==KEY_RIGHT) player.dx=1;
-        else player.dx=0;
+        key = getch();
+        if (key == 'q' || key == 'Q') break;
 
-        gerenciar_carro(&player,1);
+        /* controle vertical do player (set dy) */
+        if (key == KEY_UP) player.dy = -1.0f;
+        else if (key == KEY_DOWN) player.dy = 1.0f;
+        else player.dy = 0.0f;
 
+        /* controle horizontal do player (set dx) */
+        if (key == KEY_LEFT) player.dx = -1.0f;
+        else if (key == KEY_RIGHT) player.dx = 1.0f;
+        else player.dx = 0.0f;
+
+        /* atualiza e desenha player */
+        gerenciar_carro(&player, 1);
+
+        /* inimigos */
         for (int i = 0; i < n_carros; i++) {
-            carro[i].acumulo_y+=carro[i].dy;
-            if(carro[i].acumulo_y>1 || carro[i].acumulo_y<0){
-                carro[i].acumulo_y=0;
+            carro[i].acumulo_y += carro[i].dy;
+            if (carro[i].acumulo_y > 1.0f || carro[i].acumulo_y < 0.0f) {
+                carro[i].acumulo_y = 0.0f;
             }
             carro[i].y += carro[i].acumulo_y;
 
+            /* se saiu da tela, respawna em cima e incrementa pontos */
             if (carro[i].y > altura) {
                 int pista_esq = meio - 6;
                 int pista_dir = meio + 6 - largura_carroGG;
-                carro[i].x = pista_esq + get_random(pista_dir - pista_esq);
-                carro[i].y = -get_random(30)*altura_carroPP;
+                int span = pista_dir - pista_esq;
+                if (span <= 0) span = 1;
+                carro[i].x = pista_esq + get_random(span + 1);
+                carro[i].y = - (float)get_random(30) * altura_carroPP;
                 mudar_modificador(&carro[i]);
                 usleep(20000);
-                pontuacao++; // soma pontos quando um carro passa
+                pontuacao++;
             }
 
-            int movimento=get_random(5);
-            if(movimento>2){
-                carro[i].dx=((get_random(11)-5)/5);
-            }else{
-                carro[i].dx=((get_random(11)-5)/5)+carro[i].modificador;
+            /* movimento lateral aleatório (usar divisão float) */
+            int movimento = get_random(5);
+            if (movimento > 2) {
+                carro[i].dx = ((float)(get_random(11) - 5) / 5.0f);
+            } else {
+                carro[i].dx = ((float)(get_random(11) - 5) / 5.0f) + carro[i].modificador;
             }
 
             gerenciar_carro(&carro[i], 0);
 
-            // Verifica colisão com o jogador
+            /* ------ COLISÃO: recuo do jogador (e pequeno recuo do inimigo para evitar repetição) ------ */
             if (colidiu(player, carro[i])) {
-                vidas--; // perde vida
-                if (vidas <= 0) {
-                    mvprintw(altura/2, meio-5, "GAME OVER!");
-                    mvprintw(altura/2+1, meio-7, "Pontuacao: %d", pontuacao);
-                    refresh();
-                    usleep(3000000);
-                    endwin();
-                    return 0;
-                } else {
-                    mvprintw(altura/2, meio-5, "COLISAO! Vidas restantes: %d", vidas);
-                    refresh();
-                    usleep(1000000);
-                }
+                /* recuo do jogador: move para baixo (mais próximo do fim da tela) */
+                player.y += 3.0f;
+                if (player.y > altura - altura_carroGG) player.y = altura - altura_carroGG;
+
+                /* empurra um pouco o inimigo para baixo (assim não bate infinitamente no mesmo frame) */
+                carro[i].y += 5.0f;
+
+                /* opcional: inverter velocidade lateral do inimigo para dar sensação de impacto */
+                carro[i].dx = -carro[i].dx;
             }
         }
 
-        // HUD (informações na tela)
-        mvprintw(0, 2, "Vidas: %d Pontos: %d", vidas, pontuacao);
+        /* HUD */
+        mvprintw(0, 2, "Pontos: %d", pontuacao);
 
         refresh();
-        usleep(16000);
+        usleep(16000); /* ~60 FPS (ajuste conforme necessário) */
     }
 
     endwin();
